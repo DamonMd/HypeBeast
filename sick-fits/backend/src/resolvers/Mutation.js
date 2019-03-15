@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { randomBytes } = require("crypto");
 const { promisify } = require("util");
 const { transport, makeANiceEmail } = require("../mail");
+const { hasPermission } = require("../utils");
 
 const Mutations = {
   //TODO: check if they are logged in
@@ -182,6 +183,35 @@ const Mutations = {
     });
     // 8. return the new user
     return updatedUser;
+  },
+  async updatePermissions(parent, args, context, info) {
+    // 1. see if user is signed in
+    if (!context.request.userId) {
+      throw new Error("Must be signed in!");
+    }
+    // 2. retrieve user from db
+    const user = await context.db.query.user(
+      {
+        where: { id: context.request.userId }
+      },
+      info
+    );
+    // 3. see if user has appropriate permissions
+    hasPermission(user, ["ADMIN", "PERMISSIONUPDATE"]);
+    // 4. update user in db
+    return context.db.mutation.updateUser(
+      {
+        data: {
+          permissions: {
+            set: args.permissions
+          }
+        },
+        where: {
+          id: args.userId
+        }
+      },
+      info
+    );
   }
 };
 

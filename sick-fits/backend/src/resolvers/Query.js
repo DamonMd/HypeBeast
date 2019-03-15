@@ -24,8 +24,10 @@ const Query = {
     if (!context.request.userId) {
       throw new Error("Must be logged in");
     }
-    // 2. retrieve user?
-    //
+    // 2. return the users
+    hasPermission(context.request.user, ["ADMIN", "PERMISSIONUPDATE"]);
+    // 3. return the users
+    return context.db.query.users({}, info);
   }
 };
 
