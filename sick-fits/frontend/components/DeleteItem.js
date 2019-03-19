@@ -38,7 +38,9 @@ class DeleteItem extends Component {
           <button
             onClick={() => {
               if (confirm("you sure about deleting this?")) {
-                deleteItem();
+                deleteItem().catch(err => {
+                  alert(err.message);
+                });
               }
             }}
           >
