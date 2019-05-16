@@ -4,6 +4,7 @@ const { randomBytes } = require("crypto");
 const { promisify } = require("util");
 const { transport, makeANiceEmail } = require("../mail");
 const { hasPermission } = require("../utils");
+const stripe = require("../stripe");
 
 const Mutations = {
   //TODO: check if they are logged in
@@ -53,7 +54,7 @@ const Mutations = {
     // check user auth with owner status or permission status
     const owner = item.user.id === context.request.userId;
     const hasPermissions = ["ADMIN", "ITEMDELETE"].some(p =>
-      context.req.user.permissions.includes(p)
+      context.request.user.permissions.includes(p)
     );
     // delete it
     if (!owner && !hasPermissions) {
@@ -239,28 +240,136 @@ const Mutations = {
     // increment by one if it is
     if (existingCartItem) {
       console.log("item already exists");
-      return context.db.mutation.updateCartItem({
-        where: {
-          id: existingCartItem.id
+      return context.db.mutation.updateCartItem(
+        {
+          where: {
+            id: existingCartItem.id
+          },
+          data: {
+            quantity: existingCartItem.quantity + 1
+          }
         },
-        data: {
-          quantity: existingCartItem.quantity + 1
-        }
-      });
+        info
+      );
     }
     // if not, create fresh cart item for user
-    return context.db.mutation.createCartItem({
-      data: {
-        //since a cart item is really just a connection to an already created item
-        //and a user, use the connect syntax from prisma
-        user: {
-          connect: { id: userId }
-        },
-        item: {
-          connect: { id: args.id }
+    return context.db.mutation.createCartItem(
+      {
+        data: {
+          //since a cart item is really just a connection to an already created item
+          //and a user, use the connect syntax from prisma
+          user: {
+            connect: { id: userId }
+          },
+          item: {
+            connect: { id: args.id }
+          }
         }
+      },
+      info
+    );
+  },
+  async removeFromCart(parent, args, context, info) {
+    // 1. Find the Cart Item
+    const item = await context.db.query.cartItem(
+      {
+        where: {
+          id: args.id
+        }
+      },
+      `{id, user {id}}`
+    );
+    const [existingCartItem] = await context.db.query.cartItems({
+      where: {
+        user: { id: context.request.userId },
+        item: { id: args.id }
       }
     });
+
+    if (!item) throw new Error("no item found!");
+    // 2. Make sure they own it
+    if (context.request.userId !== item.user.id) {
+      throw new Error("doesn't belong to you");
+    }
+    // 3. Delete that item
+    return context.db.mutation.deleteCartItem(
+      {
+        where: { id: args.id }
+      },
+      info
+    );
+  },
+  async createOrder(parent, args, context, info) {
+    // 1. Query current user and make sure they are signed in
+    const { userId } = context.request;
+    if (!userId) throw new Error("You must be signed in");
+    // 2. recalculate total as you cant rely on front end display price
+    const user = await context.db.query.user(
+      { where: { id: userId } },
+      `
+      {
+      id
+      name 
+      email
+      cart{
+        id
+        quantity
+        item{
+          title
+          price
+          id
+          description
+          image
+          largeImage
+        }
+      }
+    }
+      `
+    );
+    const amount = user.cart.reduce((total, cartItem) => {
+      return total + cartItem.quantity * cartItem.item.price;
+    }, 0);
+    console.log("going to charge a total of", amount);
+    // 3. create stripe Charge (turn token into straight cash homey)
+    const charge = await stripe.charges.create({
+      amount: amount,
+      currency: "USD",
+      source: args.token
+    });
+    // 4. convert Cart Items to order items
+    const orderItems = user.cart.map(cartItem => {
+      const orderItem = {
+        ...cartItem.item,
+        quantity: cartItem.quantity,
+        user: { connect: { id: userId } }
+      };
+      //don't want the id of the order item to be that of the cartItem.item so we delete
+      delete orderItem.id;
+      return orderItem;
+    });
+    // 5. create the order
+    const order = await context.db.mutation
+      .createOrder({
+        data: {
+          charge: charge.id,
+          total: charge.amount,
+          // while creating the order, prisma will also create the order items with the create syntax
+          items: { create: orderItems },
+          user: { connect: { id: userId } }
+        }
+      })
+      .catch(err => {
+        throw new Error("error in processing order at this time");
+      });
+    // 6. clean up - clear the users cart after payment, delete cart items
+    const cartItemIds = user.cart.map(cartItem => cartItem.id);
+    await context.db.mutation.deleteManyCartItems({
+      where: {
+        id_in: cartItemIds
+      }
+    });
+    // 7. return the order to the client
+    return order;
   }
 };
 

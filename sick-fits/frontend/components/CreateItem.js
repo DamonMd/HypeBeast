@@ -68,6 +68,7 @@ class CreateItem extends Component {
       <Mutation mutation={CREATE_ITEM_MUTATION} variables={this.state}>
         {(createItem, { loading, error }) => (
           <Form
+            data-test="form"
             onSubmit={async e => {
               e.preventDefault();
               //TODO: add in check to make sure cloudinary has returned a response
@@ -98,6 +99,7 @@ class CreateItem extends Component {
               <input
                 type="text"
                 name="title"
+                id="title"
                 value={title}
                 placeholder="Title"
                 onChange={this.handleChange}
@@ -106,12 +108,14 @@ class CreateItem extends Component {
               <input
                 type="number"
                 name="price"
+                id="price"
                 value={price}
                 onChange={this.handleChange}
               />
               <label htmlFor="description">Description</label>
               <textarea
                 type="text"
+                id="description"
                 name="description"
                 value={description}
                 placeholder="Enter a description"
